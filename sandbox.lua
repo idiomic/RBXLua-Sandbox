@@ -10,6 +10,9 @@ local select = select
 local tostring = tostring
 local newproxy = newproxy
 
+-- Unfortunately metamethods have different ways of invoking
+-- the default metamethods of values. This table provides
+-- metamethods which does that, so they can be easily wrapped.
 local defaultMT = {}
 function defaultMT:__index(k) 		return self[k] 	end
 function defaultMT:__newindex(k, v) self[k] = v 	end
@@ -30,23 +33,26 @@ function defaultMT:__len()			return #self 	end
 
 local Capsule = {}
 Capsule.__metatable = 'This debug metatable is locked.'
-setmetatable(Capsule, {__index = print})
 
 -- We don't want to prevent interfaces and 'data' from being
 -- garbage collected. While unwrapped 'data' shouldn't be present
 -- in lua, interfaces will always be present in lua for the
 -- lifetime of the data. So, we remove the data when the interfaces
 -- are garbage collected, and allow interfaces to be collected.
-local datas = setmetatable({}, {__mode = 'k'})
-local wrapped = setmetatable({}, {__mode = 'v'})
+local original = setmetatable({}, {__mode = 'k'})
+local wrapper = setmetatable({}, {__mode = 'v'})
 
-local i, n 
 -- Since RBXLua isn't multithreaded and wrap/unwrap cannot
 -- yield, i and n are fine being passed as upvalues. This
 -- allows a very simple implmentation of a function wrapper
 -- without the use of tables and unpack, which does not
 -- always preserve nil values.
+local i, n 
 
+-- This function is called to make sure no wrappers get passed
+-- outside the sandbox. The only data that leaves the sandbox is
+-- through metamethod and function call arguments. These arguments
+-- are always unwrapped.
 local function unwrap(...)
 	if not i then
 		i = 1
@@ -54,8 +60,8 @@ local function unwrap(...)
 	end
 
 	local v = select(i, ...)
-	if wrapped[v] then
-		v = datas[wrapped[v]]
+	if wrapper[v] then
+		v = original[wrapper[v]]
 	end
 
 	if i < n then
@@ -67,6 +73,7 @@ local function unwrap(...)
 	end
 end
 
+-- The return value of all function and metamethod calls is wrapped.
 local function wrap(...)
 	if not i then
 		i = 1
@@ -74,24 +81,25 @@ local function wrap(...)
 	end
 
 	local v = select(i, ...)
-	if not wrapped[v] then
+	if not wrapper[v] then
 		local vType = type(v)
 		local interface
 
 		if vType == 'function' then
+			local func = v -- v will be changed here in a bit
 			interface = function(...)
-				return wrap(value(unwrap(...)))
+				return wrap(func(unwrap(...)))
 			end
 		elseif vType == 'table' then
-			interface = Capsule.new(v, {})
+			interface = setmetatable({}, Capsule)
 		elseif vType == 'userdata' then
-			interface = Capsule.new(v, newproxy(true))
+			interface = setmetatable(newproxy(true), Capsule)
 		end
 
 		if interface then
-			wrapped[v] = interface
-			wrapped[interface] = interface
-			datas[interface] = v
+			wrapper[v] = interface -- Same data, same interface. Preserves equality tests.
+			wrapper[interface] = interface -- Prevent encapsulating capsules.
+			original[interface] = v -- store the original value to perform operations on and unwrap
 			v = interface
 		end
 	end
@@ -105,19 +113,14 @@ local function wrap(...)
 	end
 end
 
-function Capsule.new(data, interface)
-	if wrapped[data] then
-		return wrapped[data]
-	end
-
-	setmetatable(interface, Capsule)
-	datas[interface] = data
-	wrapped[data] = interface -- Same data, same capsule. Preserves equality tests.
-	wrapped[interface] = interface -- Prevent encapsulating capsules.
-
-	return interface
+-- Here, we ensure each metamethod is wrapped.
+for key, metamethod in next, defaultMT do
+	Capsule[key] = wrap(metamethod)
 end
 
+-- mwhaha, now even calling rawset is sandboxed... 
+-- the only functions not sandboxed are those included in the
+-- locked string metatable (i.e. 'myStringVar:sub(i, j)')
 return function()
 	return setfenv(2, wrap(getfenv(2)))
 end
