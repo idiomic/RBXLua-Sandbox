@@ -16,7 +16,7 @@ local newproxy = newproxy
 local Capsule = {}
 Capsule.__metatable = 'This debug metatable is locked.'
 function Capsule:__index(k) 		return self[k] 	end
-function Capsule:__newindex(k, v) self[k] = v 	end
+function Capsule:__newindex(k, v)	self[k] = v 	end
 function Capsule:__call(...)		self(...) 		end
 function Capsule:__concat(v)		return self .. v end
 function Capsule:__unm()			return -self 	end
@@ -45,7 +45,7 @@ local wrapper = setmetatable({}, {__mode = 'v'})
 -- allows a very simple implmentation of a function wrapper
 -- without the use of tables and unpack, which does not
 -- always preserve nil values.
-local i, n
+local i, n = 1, 0
 
 -- This function is called to make sure no wrappers get passed
 -- outside the sandbox. The only data that leaves the sandbox is
@@ -54,14 +54,16 @@ local i, n
 local function unwrap(...)
 	if i > n then
 		i = 1
-		n = select('#', ...)
+		n = select('#', ...) -- make sure we handle n = 0 correctly
 	end
 
+	-- value may be nil, we should proceed with caution.
 	local value = select(i, ...)
-	if wrapper[value] then
+	if value and wrapper[value] then
 		value = original[wrapper[value]]
 	end
 
+	-- wrap the other values too
 	i = i + 1
 	if i <= n then
 		return value, unwrap(...)
@@ -74,12 +76,12 @@ end
 local function wrap(...)
 	if i > n then
 		i = 1
-		n = select('#', ...)
+		n = select('#', ...) -- make sure we handle n = 0 correctly
 	end
 
+	-- value may be nil, we should proceed with caution.
 	local value = select(i, ...)
-	local wrapped = wrapper[value]
-	if not wrapped then
+	if value and wrapper[value] then
 		local vType = type(value)
 		if vType == 'function' then
 			wrapped = function(...)
@@ -98,6 +100,7 @@ local function wrap(...)
 		original[wrapped] = value -- store the original value to perform operations on and unwrap
 	end
 
+	-- wrap the other values too
 	i = i + 1
 	if i <= n then
 		return value, wrap(...)
