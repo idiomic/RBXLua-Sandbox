@@ -81,26 +81,30 @@ local function wrap(...)
 
 	-- value may be nil, we should proceed with caution.
 	local value = select(i, ...)
-	if value and wrapper[value] then
-		local vType = type(value)
-		local wrapped
-		if vType == 'function' then
-			local func = value -- value will be changed to the wrapped version soon.
-			wrapped = function(...)
-				return wrap(func(unwrap(...)))
+	if value then
+		local wrapped = wrapper[value]
+
+		if not wrapped then
+			local vType = type(value)
+			if vType == 'function' then
+				local func = value -- value will be changed to the wrapped version soon.
+				wrapped = function(...)
+					return wrap(func(unwrap(...)))
+				end
+			elseif vType == 'table' then
+				wrapped = setmetatable({}, Capsule)
+			elseif vType == 'userdata' then
+				wrapped = setmetatable(newproxy(true), Capsule)
+			else
+				wrapped = value
 			end
-		elseif vType == 'table' then
-			wrapped = setmetatable({}, Capsule)
-		elseif vType == 'userdata' then
-			wrapped = setmetatable(newproxy(true), Capsule)
-		else
-			wrapped = value
+
+			wrapper[value] = wrapped -- Same data, same wrapper. Preserves equality tests.
+			wrapper[wrapped] = wrapped -- Prevent encapsulating capsules.
+			original[wrapped] = value -- store the original value to perform operations on and unwrap
 		end
 
-		wrapper[value] = wrapped -- Same data, same wrapper. Preserves equality tests.
-		wrapper[wrapped] = wrapped -- Prevent encapsulating capsules.
-		original[wrapped] = value -- store the original value to perform operations on and unwrap
-		value = wrapper
+		value = wrapped
 	end
 
 	-- wrap the other values too
