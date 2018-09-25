@@ -5,7 +5,6 @@ local setfenv = setfenv
 local getfenv = getfenv
 local setmetatable = setmetatable
 local type = type
-local rawequal = rawequal
 local select = select
 local tostring = tostring
 local newproxy = newproxy
@@ -54,7 +53,14 @@ local i, n = 1, 0
 local function unwrap(...)
 	if i > n then
 		i = 1
-		n = select('#', ...) -- make sure we handle n = 0 correctly
+		n = select('#', ...)
+
+		-- make sure we handle n = 0 correctly, otherwise we can break
+		-- vararg functions like 'print()' because they see the number of
+		-- inputs, including nil ones.
+		if n == 0 then
+			return
+		end
 	end
 
 	-- value may be nil, we should proceed with caution.
@@ -76,7 +82,14 @@ end
 local function wrap(...)
 	if i > n then
 		i = 1
-		n = select('#', ...) -- make sure we handle n = 0 correctly
+		n = select('#', ...)
+
+		-- make sure we handle n = 0 correctly, otherwise we can break
+		-- vararg functions like 'print()' because they see the number of
+		-- inputs, including nil ones.
+		if n == 0 then
+			return
+		end
 	end
 
 	-- value may be nil, we should proceed with caution.
@@ -121,7 +134,7 @@ for key, metamethod in next, Capsule do
 	Capsule[key] = wrap(metamethod)
 end
 
--- mwhaha, now even calling rawset is sandboxed... 
+-- mwhaha, now even calling rawset is sandboxed...
 -- the only functions not sandboxed are those included in the
 -- locked string metatable (i.e. 'myStringVar:sub(i, j)')
 return function()
