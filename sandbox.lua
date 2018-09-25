@@ -13,26 +13,24 @@ local newproxy = newproxy
 -- Unfortunately metamethods have different ways of invoking
 -- the default metamethods of values. This table provides
 -- metamethods which does that, so they can be easily wrapped.
-local defaultMT = {}
-function defaultMT:__index(k) 		return self[k] 	end
-function defaultMT:__newindex(k, v) self[k] = v 	end
-function defaultMT:__call(...)		self(...) 		end
-function defaultMT:__concat(v)		return self .. v end
-function defaultMT:__unm()			return -self 	end
-function defaultMT:__add(v)			return self + v end
-function defaultMT:__sub(v)			return self - v end
-function defaultMT:__mul(v)			return self * v end
-function defaultMT:__div(v)			return self / v end
-function defaultMT:__mod(v)			return self % v end
-function defaultMT:__pow(v)			return self ^ v end
-function defaultMT:__tostring()		return tostring(self) end
-function defaultMT:__eq(v)			return self == v end
-function defaultMT:__lt(v)			return self < v end
-function defaultMT:__le(v)			return self <= v end
-function defaultMT:__len()			return #self 	end
-
 local Capsule = {}
 Capsule.__metatable = 'This debug metatable is locked.'
+function Capsule:__index(k) 		return self[k] 	end
+function Capsule:__newindex(k, v) self[k] = v 	end
+function Capsule:__call(...)		self(...) 		end
+function Capsule:__concat(v)		return self .. v end
+function Capsule:__unm()			return -self 	end
+function Capsule:__add(v)			return self + v end
+function Capsule:__sub(v)			return self - v end
+function Capsule:__mul(v)			return self * v end
+function Capsule:__div(v)			return self / v end
+function Capsule:__mod(v)			return self % v end
+function Capsule:__pow(v)			return self ^ v end
+function Capsule:__tostring()		return tostring(self) end
+function Capsule:__eq(v)			return self == v end
+function Capsule:__lt(v)			return self < v end
+function Capsule:__le(v)			return self <= v end
+function Capsule:__len()			return #self 	end
 
 -- We don't want to prevent interfaces and 'data' from being
 -- garbage collected. While unwrapped 'data' shouldn't be present
@@ -47,74 +45,69 @@ local wrapper = setmetatable({}, {__mode = 'v'})
 -- allows a very simple implmentation of a function wrapper
 -- without the use of tables and unpack, which does not
 -- always preserve nil values.
-local i, n 
+local i, n
 
 -- This function is called to make sure no wrappers get passed
 -- outside the sandbox. The only data that leaves the sandbox is
 -- through metamethod and function call arguments. These arguments
 -- are always unwrapped.
 local function unwrap(...)
-	if not i then
+	if i > n then
 		i = 1
 		n = select('#', ...)
 	end
 
-	local v = select(i, ...)
-	if wrapper[v] then
-		v = original[wrapper[v]]
+	local value = select(i, ...)
+	if wrapper[value] then
+		value = original[wrapper[value]]
 	end
 
-	if i < n then
-		return v, unwrap(i + 1, n, ...)
+	i = i + 1
+	if i <= n then
+		return value, unwrap(...)
 	else
-		i = nil
-		n = nil
-		return v
+		return value
 	end
 end
 
 -- The return value of all function and metamethod calls is wrapped.
 local function wrap(...)
-	if not i then
+	if i > n then
 		i = 1
 		n = select('#', ...)
 	end
 
-	local v = select(i, ...)
-	if not wrapper[v] then
-		local vType = type(v)
-		local interface
-
+	local value = select(i, ...)
+	local wrapped = wrapper[value]
+	if not wrapped then
+		local vType = type(value)
 		if vType == 'function' then
-			local func = v -- v will be changed here in a bit
-			interface = function(...)
-				return wrap(func(unwrap(...)))
+			wrapped = function(...)
+				return wrap(value(unwrap(...)))
 			end
 		elseif vType == 'table' then
-			interface = setmetatable({}, Capsule)
+			wrapped = setmetatable({}, Capsule)
 		elseif vType == 'userdata' then
-			interface = setmetatable(newproxy(true), Capsule)
+			wrapped = setmetatable(newproxy(true), Capsule)
+		else
+			wrapped = value
 		end
 
-		if interface then
-			wrapper[v] = interface -- Same data, same interface. Preserves equality tests.
-			wrapper[interface] = interface -- Prevent encapsulating capsules.
-			original[interface] = v -- store the original value to perform operations on and unwrap
-			v = interface
-		end
+		wrapper[value] = wrapped -- Same data, same wrapper. Preserves equality tests.
+		wrapper[wrapped] = wrapped -- Prevent encapsulating capsules.
+		original[wrapped] = value -- store the original value to perform operations on and unwrap
 	end
 
-	if i < n then
-		return v, unwrap(i + 1, n, ...)
+	i = i + 1
+	if i <= n then
+		return value, wrap(...)
 	else
-		i = nil
-		n = nil
-		return v
+		return value
 	end
 end
 
 -- Here, we ensure each metamethod is wrapped.
-for key, metamethod in next, defaultMT do
+for key, metamethod in next, Capsule do
 	Capsule[key] = wrap(metamethod)
 end
 
