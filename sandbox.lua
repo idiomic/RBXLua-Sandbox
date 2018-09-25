@@ -84,8 +84,9 @@ local function wrap(...)
 	if value and wrapper[value] then
 		local vType = type(value)
 		if vType == 'function' then
+			local func = value -- value will be changed to the wrapped version soon.
 			wrapped = function(...)
-				return wrap(value(unwrap(...)))
+				return wrap(func(unwrap(...)))
 			end
 		elseif vType == 'table' then
 			wrapped = setmetatable({}, Capsule)
@@ -98,6 +99,7 @@ local function wrap(...)
 		wrapper[value] = wrapped -- Same data, same wrapper. Preserves equality tests.
 		wrapper[wrapped] = wrapped -- Prevent encapsulating capsules.
 		original[wrapped] = value -- store the original value to perform operations on and unwrap
+		value = wrapper
 	end
 
 	-- wrap the other values too
