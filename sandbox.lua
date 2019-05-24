@@ -14,22 +14,22 @@ local newproxy = newproxy
 -- metamethods which does that, so they can be easily wrapped.
 local Capsule = {}
 Capsule.__metatable = 'This debug metatable is locked.'
-function Capsule:__index(k) 		return self[k] 	end
-function Capsule:__newindex(k, v)	self[k] = v 	end
-function Capsule:__call(...)		self(...) 		end
-function Capsule:__concat(v)		return self .. v end
-function Capsule:__unm()			return -self 	end
-function Capsule:__add(v)			return self + v end
-function Capsule:__sub(v)			return self - v end
-function Capsule:__mul(v)			return self * v end
-function Capsule:__div(v)			return self / v end
-function Capsule:__mod(v)			return self % v end
-function Capsule:__pow(v)			return self ^ v end
-function Capsule:__tostring()		return tostring(self) end
-function Capsule:__eq(v)			return self == v end
-function Capsule:__lt(v)			return self < v end
-function Capsule:__le(v)			return self <= v end
-function Capsule:__len()			return #self 	end
+function Capsule:__index(k)         print('accessed', k); return self[k]     end
+function Capsule:__newindex(k, v)   self[k] = v     end
+function Capsule:__call(...)        self(...)         end
+function Capsule:__concat(v)        return self .. v end
+function Capsule:__unm()            return -self     end
+function Capsule:__add(v)           return self + v end
+function Capsule:__sub(v)           return self - v end
+function Capsule:__mul(v)           return self * v end
+function Capsule:__div(v)           return self / v end
+function Capsule:__mod(v)           return self % v end
+function Capsule:__pow(v)           return self ^ v end
+function Capsule:__tostring()       return tostring(self) end
+function Capsule:__eq(v)            return self == v end
+function Capsule:__lt(v)            return self < v end
+function Capsule:__le(v)            return self <= v end
+function Capsule:__len()            return #self     end
 
 -- We don't want to prevent interfaces and 'data' from being
 -- garbage collected. While unwrapped 'data' shouldn't be present
@@ -38,6 +38,11 @@ function Capsule:__len()			return #self 	end
 -- are garbage collected, and allow interfaces to be collected.
 local original = setmetatable({}, {__mode = 'k'})
 local wrapper = setmetatable({}, {__mode = 'v'})
+
+-- unwrap may need to wrap functions to make sure sandboxed functions passed out
+-- remain sandboxed. This is a predefinition to keep wrap local but defined after,
+-- so that wrap can call unwrap when calling outside functions.
+local wrap
 
 -- Since RBXLua isn't multithreaded and wrap/unwrap cannot
 -- yield, i and n are fine being passed as upvalues. This
@@ -51,92 +56,117 @@ local i, n = 1, 0
 -- through metamethod and function call arguments. These arguments
 -- are always unwrapped.
 local function unwrap(...)
-	if i > n then
-		i = 1
-		n = select('#', ...)
+    if i > n then
+        i = 1
+        n = select('#', ...)
 
-		-- make sure we handle n = 0 correctly, otherwise we can break
-		-- vararg functions like 'print()' because they see the number of
-		-- inputs, including nil ones.
-		if n == 0 then
-			return
-		end
-	end
+        -- make sure we handle n = 0 correctly, otherwise we can break
+        -- vararg functions like 'print()' because they see the number of
+        -- inputs, including nil ones.
+        if n == 0 then
+            return
+        end
+    end
 
-	-- value may be nil, we should proceed with caution.
-	local value = select(i, ...)
-	if value and wrapper[value] then
-		value = original[wrapper[value]]
-	end
+    -- value may be nil, we should proceed with caution.
+    local value = select(i, ...)
+    if value then
+        if type(value) == 'function' then
+            local wrappedFunc = wrapper[value]
+            if wrappedFunc then
+                local originalFunc = original[wrappedFunc]
+                if originalFunc == value then
+                    -- sandbox has access to original function. This func
+                    -- must have been defined inside of the sandboxed code
+                    return wrappedFunc
+                else
+                    return originalFunc
+                end
+            else
+                -- this function wasn't passed into the sandbox and so must
+                -- have originated from inside. We need to wrap it when
+                -- it leaves so that any arguments passed in are handled.
+                wrappedFunc = function(...)
+                    return unwrap(value(wrap(...)))
+                end
+                wrapper[wrappedFunc] = wrappedFunc
+                wrapper[value] = wrappedFunc
+                original[wrappedFunc] = value
+                return wrappedFunc
+            end
+        elseif wrapper[value] then
+            value = original[wrapper[value]]
+         end
+    end
 
-	-- wrap the other values too
-	i = i + 1
-	if i <= n then
-		return value, unwrap(...)
-	else
-		return value
-	end
+    -- wrap the other values too
+    i = i + 1
+    if i <= n then
+        return value, unwrap(...)
+    else
+        return value
+    end
 end
 
 -- The return value of all function and metamethod calls is wrapped.
-local function wrap(...)
-	if i > n then
-		i = 1
-		n = select('#', ...)
+function wrap(...)
+    if i > n then
+        i = 1
+        n = select('#', ...)
 
-		-- make sure we handle n = 0 correctly, otherwise we can break
-		-- vararg functions like 'print()' because they see the number of
-		-- inputs, including nil ones.
-		if n == 0 then
-			return
-		end
-	end
+        -- make sure we handle n = 0 correctly, otherwise we can break
+        -- vararg functions like 'print()' because they see the number of
+        -- inputs, including nil ones.
+        if n == 0 then
+            return
+        end
+    end
 
-	-- value may be nil, we should proceed with caution.
-	local value = select(i, ...)
-	if value then
-		local wrapped = wrapper[value]
+    -- value may be nil, we should proceed with caution.
+    local value = select(i, ...)
+    if value then
+        local wrapped = wrapper[value]
 
-		if not wrapped then
-			local vType = type(value)
-			if vType == 'function' then
-				local func = value -- value will be changed to the wrapped version soon.
-				wrapped = function(...)
-					return wrap(func(unwrap(...)))
-				end
-			elseif vType == 'table' then
-				wrapped = setmetatable({}, Capsule)
-			elseif vType == 'userdata' then
-				wrapped = setmetatable(newproxy(true), Capsule)
-			else
-				wrapped = value
-			end
+        if not wrapped then
+            local vType = type(value)
+            if vType == 'function' then
+                local func = value -- value will be changed to the wrapped version soon.
+                wrapped = function(...)
+                    return wrap(func(unwrap(...)))
+                end
+            elseif vType == 'table' then
+                wrapped = setmetatable({}, Capsule)
+            elseif vType == 'userdata' then
+                wrapped = setmetatable(newproxy(true), Capsule)
+            else
+                wrapped = value
+            end
 
-			wrapper[value] = wrapped -- Same data, same wrapper. Preserves equality tests.
-			wrapper[wrapped] = wrapped -- Prevent encapsulating capsules.
-			original[wrapped] = value -- store the original value to perform operations on and unwrap
-		end
+            wrapper[value] = wrapped -- Same data, same wrapper. Preserves equality tests.
+            wrapper[wrapped] = wrapped -- Prevent encapsulating capsules.
+            original[wrapped] = value -- store the original value to perform operations on and unwrap
+        end
 
-		value = wrapped
-	end
+        value = wrapped
+    end
 
-	-- wrap the other values too
-	i = i + 1
-	if i <= n then
-		return value, wrap(...)
-	else
-		return value
-	end
+    -- wrap the other values too
+    i = i + 1
+    if i <= n then
+        return value, wrap(...)
+    else
+        return value
+    end
 end
 
 -- Here, we ensure each metamethod is wrapped.
 for key, metamethod in next, Capsule do
-	Capsule[key] = wrap(metamethod)
+    Capsule[key] = wrap(metamethod)
 end
 
 -- mwhaha, now even calling rawset is sandboxed...
 -- the only functions not sandboxed are those included in the
 -- locked string metatable (i.e. 'myStringVar:sub(i, j)')
 return function()
-	return setfenv(2, wrap(getfenv(2)))
+    return setfenv(2, wrap(getfenv(2)))
 end
