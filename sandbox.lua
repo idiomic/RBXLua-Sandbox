@@ -14,7 +14,7 @@ local newproxy = newproxy
 -- metamethods which does that, so they can be easily wrapped.
 local Capsule = {}
 Capsule.__metatable = 'This debug metatable is locked.'
-function Capsule:__index(k)         print('accessed', k); return self[k]     end
+function Capsule:__index(k)         return self[k]     end
 function Capsule:__newindex(k, v)   self[k] = v     end
 function Capsule:__call(...)        self(...)         end
 function Capsule:__concat(v)        return self .. v end
