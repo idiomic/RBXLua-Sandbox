@@ -4,32 +4,36 @@
 local setfenv = setfenv
 local getfenv = getfenv
 local setmetatable = setmetatable
+local getmetatable = getmetatable
 local type = type
 local select = select
 local tostring = tostring
 local newproxy = newproxy
+local print = print
+local next = next
 
 -- Unfortunately metamethods have different ways of invoking
 -- the default metamethods of values. This table provides
 -- metamethods which does that, so they can be easily wrapped.
 local Capsule = {}
 Capsule.__metatable = 'This debug metatable is locked.'
-function Capsule:__index(k)         return self[k]     end
-function Capsule:__newindex(k, v)   self[k] = v     end
-function Capsule:__call(...)        self(...)         end
+function Capsule:__index(k)         return self[k]   end
+function Capsule:__newindex(k, v)   self[k] = v      end
+function Capsule:__call(...)        self(...)        end
 function Capsule:__concat(v)        return self .. v end
 function Capsule:__unm()            return -self     end
-function Capsule:__add(v)           return self + v end
-function Capsule:__sub(v)           return self - v end
-function Capsule:__mul(v)           return self * v end
-function Capsule:__div(v)           return self / v end
-function Capsule:__mod(v)           return self % v end
-function Capsule:__pow(v)           return self ^ v end
+function Capsule:__add(v)           return self + v  end
+function Capsule:__sub(v)           return self - v  end
+function Capsule:__mul(v)           return self * v  end
+function Capsule:__div(v)           return self / v  end
+function Capsule:__mod(v)           return self % v  end
+function Capsule:__pow(v)           return self ^ v  end
 function Capsule:__tostring()       return tostring(self) end
 function Capsule:__eq(v)            return self == v end
-function Capsule:__lt(v)            return self < v end
+function Capsule:__lt(v)            return self < v  end
 function Capsule:__le(v)            return self <= v end
 function Capsule:__len()            return #self     end
+local CapsuleMT = {__index = Capsule}
 
 -- We don't want to prevent interfaces and 'data' from being
 -- garbage collected. While unwrapped 'data' shouldn't be present
@@ -37,7 +41,7 @@ function Capsule:__len()            return #self     end
 -- lifetime of the data. So, we remove the data when the interfaces
 -- are garbage collected, and allow interfaces to be collected.
 local original = setmetatable({}, {__mode = 'k'})
-local wrapper = setmetatable({}, {__mode = 'v'})
+local wrapper  = setmetatable({}, {__mode = 'v'})
 
 -- unwrap may need to wrap functions to make sure sandboxed functions passed out
 -- remain sandboxed. This is a predefinition to keep wrap local but defined after,
@@ -72,6 +76,7 @@ local function unwrap(...)
     local value = select(i, ...)
     if value then
         if type(value) == 'function' then
+			print 'in'
             local wrappedFunc = wrapper[value]
             if wrappedFunc then
                 local originalFunc = original[wrappedFunc]
@@ -132,12 +137,17 @@ function wrap(...)
             if vType == 'function' then
                 local func = value -- value will be changed to the wrapped version soon.
                 wrapped = function(...)
+					print 'out'
                     return wrap(func(unwrap(...)))
                 end
             elseif vType == 'table' then
                 wrapped = setmetatable({}, Capsule)
             elseif vType == 'userdata' then
-                wrapped = setmetatable(newproxy(true), Capsule)
+				wrapped = newproxy(true)
+				local mt = getmetatable(wrapped)
+				for key, value in next, Capsule do
+					mt[key] = value
+				end
             else
                 wrapped = value
             end
