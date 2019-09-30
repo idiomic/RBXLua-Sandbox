@@ -1,3 +1,13 @@
+-- Please note when using this sandbox:
+--   -  Code running outside the sandbox can be tricked into freeing code from the
+--      sandbox. In particular, great care should be taken when giving sandboxed
+--      code access indirectly to setfenv / getfenv. Secure versions are provided
+--      inside the sandbox so their use is fine.
+--   -  The security of this code has not been exhaustively researched. There may be
+--      undiscovered issues with it. Please do not use for production code. These
+--      sandbox may be useful for debugging and discovering script behavior, but
+--      should not be a standalone means of security.
+
 -- Localize global functions to prevent a changing environment
 -- from messing with this code. This should allow multiple
 -- instances of this code to run at once. (Don't do that...)
@@ -47,6 +57,59 @@ local wrapper  = setmetatable({}, {__mode = 'v'})
 -- remain sandboxed. This is a predefinition to keep wrap local but defined after,
 -- so that wrap can call unwrap when calling outside functions.
 local wrap
+local unwrap
+
+local secureVersions = {
+	-- As shown by ForbiddenJ, setfenv could be called with the return value of
+	-- getfenv to escape the sandbox. The environment returned by getfenv was wrapped
+	-- and then when passed to setfenv it was unwrapped. If the original version
+	-- was an unsandboxed envionrment, then the sandboxed code could gain access
+	-- to unsandboxed functions. To stop this, setfenv called from sandboxed code
+	-- will always check if the environment being overwritten is sandboxed, and if
+	-- so then it will set the envirionment to a sandboxed version.
+	[setfenv] = function(target, newWrappedEnv)
+		-- We want to hide the fact that we are calling setfenv so that the sandbox
+		-- doesn't break scripts or provide unexpected behavior. Since 0 is the
+		-- thread envirionment, we only add 1 if the target is 1 or higher. Also,
+		-- calling setfenv or getfenv with a negative number results in an error,
+		-- we'll let getfenv / setfenv return the error and be sure not to adjust
+		-- the value in that case.
+		if type(target) == 'number' and target > 0 then
+			target = target + 2
+		elseif target == wrapper[target] then
+			target = original[target]
+		end
+	
+		-- Check if the old envirionment was wrapped to determine if we need to
+		-- wrap the new one. Also make sure that if an invalid level or target was\
+		-- was given that the error shows it was from setfenv, not getfenv.
+		local success, oldEnv = pcall(getfenv, target)
+		local newEnv = newWrappedEnv
+		if not success or oldEnv == wrapper[oldEnv] then
+			-- It's a wrap, folks!
+			newEnv = newWrappedEnv
+		else
+			newEnv = original[newWrappedEnv]
+		end
+
+		return wrap(setfenv(target, newEnv))
+	end,
+
+	-- We simply want to modify getfenv to hide the sandbox. This isn't for security
+	-- purposes (they can't harm the sandbox even if they could edit its environment),
+	-- however we would prefer to have code function the same inside and outside the
+	-- sandbox.
+	[getfenv] = function(target, newWrappedEnv)
+		-- see comments in setfenv above for an explenation of these conditions
+		if type(target) == 'number' and target > 0 then
+			target = target + 1
+		elseif target == wrapper[target] then
+			target = original[target]
+		end
+	
+		return wrap(getfenv(target))
+	end,
+}
 
 -- Since RBXLua isn't multithreaded and wrap/unwrap cannot
 -- yield, i and n are fine being passed as upvalues. This
@@ -59,7 +122,7 @@ local i, n = 1, 0
 -- outside the sandbox. The only data that leaves the sandbox is
 -- through metamethod and function call arguments. These arguments
 -- are always unwrapped.
-local function unwrap(...)
+function unwrap(...)
     if i > n then
         i = 1
         n = select('#', ...)
@@ -76,7 +139,6 @@ local function unwrap(...)
     local value = select(i, ...)
     if value then
         if type(value) == 'function' then
-			print 'in'
             local wrappedFunc = wrapper[value]
             if wrappedFunc then
                 local originalFunc = original[wrappedFunc]
@@ -101,7 +163,7 @@ local function unwrap(...)
             end
         elseif wrapper[value] then
             value = original[wrapper[value]]
-         end
+        end
     end
 
     -- wrap the other values too
@@ -135,11 +197,14 @@ function wrap(...)
         if not wrapped then
             local vType = type(value)
             if vType == 'function' then
-                local func = value -- value will be changed to the wrapped version soon.
-                wrapped = function(...)
-					print 'out'
-                    return wrap(func(unwrap(...)))
-                end
+				if secureVersions[value] then
+	                wrapped = secureVersions[value]
+				else
+                	local func = value -- value will be changed to the wrapped version soon.
+	                wrapped = function(...)
+	                    return wrap(func(unwrap(...)))
+	                end
+				end
             elseif vType == 'table' then
                 wrapped = setmetatable({}, Capsule)
             elseif vType == 'userdata' then
